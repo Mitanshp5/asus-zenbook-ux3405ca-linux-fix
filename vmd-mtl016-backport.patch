@@ -1,0 +1,71 @@
+--- a/vmd.c
++++ b/vmd.c
+@@ -108,7 +108,13 @@
+ 	struct vmd_irq_list	*irq;
+ 	bool			enabled;
+ 	unsigned int		virq;
++	void __iomem		*flush_addr;
+ };
++
++struct vmd_dev;
++
++static void __iomem *vmd_cfg_addr(struct vmd_dev *vmd, struct pci_bus *bus,
++				  unsigned int devfn, int reg, int len);
+ 
+ /**
+  * struct vmd_irq_list - list of driver requested IRQs mapping to a VMD vector
+@@ -123,6 +129,7 @@
+ 	struct srcu_struct	srcu;
+ 	unsigned int		count;
+ 	unsigned int		virq;
++	struct vmd_dev		*vmd;
+ };
+ 
+ struct vmd_dev {
+@@ -279,6 +286,13 @@
+ 		INIT_LIST_HEAD(&vmdirq->node);
+ 		vmdirq->irq = vmd_next_irq(vmd, desc);
+ 		vmdirq->virq = virq + i;
++		if (vmd->dev->device == 0x7d0b) {
++			struct pci_dev *pdev = msi_desc_to_pci_dev(desc);
++
++			vmdirq->flush_addr = vmd_cfg_addr(vmd, pdev->bus,
++							  pdev->devfn,
++							  PCI_VENDOR_ID, 2);
++		}
+ 
+ 		irq_domain_set_info(domain, virq + i, vmdirq->irq->virq,
+ 				    &vmd_msi_controller, vmdirq,
+@@ -668,8 +682,17 @@
+ 	int idx;
+ 
+ 	idx = srcu_read_lock(&irqs->srcu);
+-	list_for_each_entry_rcu(vmdirq, &irqs->irq_list, node)
++	list_for_each_entry_rcu(vmdirq, &irqs->irq_list, node) {
++		/* MTL016: flush the MSI initiator's posted writes before
++		 * dispatching its interrupt. A read of the VMD itself is
++		 * insufficient; read the child device under cfg_lock.
++		 */
++		if (vmdirq->flush_addr) {
++			guard(raw_spinlock)(&irqs->vmd->cfg_lock);
++			readw(vmdirq->flush_addr);
++		}
+ 		generic_handle_irq(vmdirq->virq);
++	}
+ 	srcu_read_unlock(&irqs->srcu, idx);
+ 
+ 	return IRQ_HANDLED;
+@@ -700,6 +723,7 @@
+ 			return err;
+ 
+ 		INIT_LIST_HEAD(&vmd->irqs[i].irq_list);
++		vmd->irqs[i].vmd = vmd;
+ 		vmd->irqs[i].virq = pci_irq_vector(dev, i);
+ 		err = devm_request_irq(&dev->dev, vmd->irqs[i].virq,
+ 				       vmd_irq, IRQF_NO_THREAD,
+@@ -1151,4 +1175,4 @@
+ MODULE_AUTHOR("Intel Corporation");
+ MODULE_DESCRIPTION("Volume Management Device driver");
+ MODULE_LICENSE("GPL v2");
+-MODULE_VERSION("0.6");
++MODULE_VERSION("0.6-mtl016-test");

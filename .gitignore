@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+vmd-build/
+boot-entry-backups/
+*.img
+*.img.*
+mkinitcpio-*-test.conf
+*.ko
+*.ko.*
+*.o
+*.rej
+*.orig
